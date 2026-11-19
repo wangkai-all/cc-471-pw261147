@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>多租户数据集服务 · 权限控制台</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #1e293b; --panel2: #273449; --line: #334155;
+    --text: #e2e8f0; --muted: #94a3b8; --accent: #38bdf8;
+    --green: #34d399; --red: #f87171; --amber: #fbbf24; --violet: #a78bfa;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { padding: 16px 24px; background: var(--panel); border-bottom: 1px solid var(--line);
+           display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; margin-right: auto; }
+  select, input, button { font: inherit; background: var(--panel2); color: var(--text);
+           border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: #0369a1; border-color: #0ea5e9; }
+  button.danger { background: #7f1d1d; border-color: #ef4444; }
+  main { padding: 20px 24px; display: grid; gap: 16px;
+         grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; min-width: 0; }
+  .card.wide { grid-column: 1 / -1; }
+  .card h2 { margin: 0 0 12px; font-size: 15px; color: var(--accent); display: flex;
+             justify-content: space-between; align-items: center; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; font-weight: 600; }
+  .b-allow, .b-ready, .b-fresh { background: rgba(52,211,153,.15); color: var(--green); }
+  .b-deny, .b-invalidated { background: rgba(248,113,113,.15); color: var(--red); }
+  .b-retained_audit, .b-stale { background: rgba(251,191,36,.15); color: var(--amber); }
+  .b-policy { background: rgba(167,139,250,.15); color: var(--violet); }
+  .b-temp_grant { background: rgba(56,189,248,.15); color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line);
+           vertical-align: top; word-break: break-word; }
+  th { color: var(--muted); font-weight: 600; }
+  .muted { color: var(--muted); }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
+  pre { background: var(--panel2); border-radius: 6px; padding: 8px; margin: 4px 0;
+        overflow-x: auto; font-size: 12px; white-space: pre-wrap; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+  .kv { display: grid; grid-template-columns: 130px 1fr; gap: 4px 10px; font-size: 13px; }
+  .kv b { color: var(--muted); font-weight: 500; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  .tabs button.active { background: #0369a1; border-color: var(--accent); }
+  .hidden { display: none; }
+  .toast { position: fixed; right: 20px; bottom: 20px; background: var(--panel2);
+           border: 1px solid var(--accent); border-radius: 8px; padding: 12px 16px;
+           max-width: 420px; display: none; z-index: 99; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🔐 多租户数据集服务 · 权限控制台</h1>
+  <label class="muted">调用身份 X-User-Id
+    <input id="uid" type="number" value="1" style="width:90px" />
+  </label>
+  <label class="muted">数据集
+    <select id="dsSel" style="min-width:200px"></select>
+  </label>
+  <button class="primary" onclick="loadAll()">刷新</button>
+</header>
+
+<main>
+  <section class="card">
+    <h2>数据集与当前授权版本</h2>
+    <div id="dsInfo" class="kv"></div>
+  </section>
+
+  <section class="card">
+    <h2>缓存与物化状态</h2>
+    <div id="cacheInfo" class="kv"></div>
+  </section>
+
+  <section class="card wide">
+    <h2>授权版本流水（每次权限变更单调递增）</h2>
+    <table><thead><tr><th>版本</th><th>变更类型</th><th>级联失效详情</th><th>操作人</th><th>时间</th></tr></thead>
+      <tbody id="versionBody"></tbody></table>
+  </section>
+
+  <section class="card wide">
+    <h2>策略与临时授权</h2>
+    <div class="tabs">
+      <button class="active" onclick="showTab('pol', this)">持久策略</button>
+      <button onclick="showTab('grants', this)">临时授权</button>
+    </div>
+    <div id="tab-pol">
+      <table><thead><tr><th>ID</th><th>效力</th><th>范围</th><th>主体</th><th>规则</th><th>说明</th></tr></thead>
+        <tbody id="policyBody"></tbody></table>
+    </div>
+    <div id="tab-grants" class="hidden">
+      <table><thead><tr><th>ID</th><th>用户</th><th>范围</th><th>内容</th><th>版本</th><th>过期时间</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="grantBody"></tbody></table>
+    </div>
+  </section>
+
+  <section class="card wide">
+    <h2>命中规则预览（有效权限快照）</h2>
+    <div class="row">
+      <label class="muted">目标用户 ID <input id="permUid" type="number" value="2" style="width:90px" /></label>
+      <button onclick="loadPerms()">计算有效权限</button>
+    </div>
+    <div id="permOut"></div>
+  </section>
+
+  <section class="card">
+    <h2>导出状态（权限变更后失效 / 保留审计）</h2>
+    <table><thead><tr><th>ID</th><th>快照版本</th><th>状态</th><th>行数</th><th>失效原因</th></tr></thead>
+      <tbody id="exportBody"></tbody></table>
+  </section>
+
+  <section class="card">
+    <h2>物化结果（stale 后按新权限重算）</h2>
+    <table><thead><tr><th>名称</th><th>版本</th><th>状态</th><th>分组/聚合</th></tr></thead>
+      <tbody id="matBody"></tbody></table>
+  </section>
+
+  <section class="card wide">
+    <h2>审计记录（越权可追溯，含 request_id / 命中规则 / 版本）</h2>
+    <div class="row">
+      <select id="auditFilter">
+        <option value="">全部决策</option>
+        <option value="deny">仅 deny（越权）</option>
+        <option value="allow">仅 allow</option>
+      </select>
+      <button onclick="loadAudit()">查询审计</button>
+    </div>
+    <table><thead><tr><th>时间</th><th>request_id</th><th>操作人</th><th>动作</th><th>决策</th><th>版本</th><th>原因</th></tr></thead>
+      <tbody id="auditBody"></tbody></table>
+  </section>
+
+  <section class="card wide">
+    <h2>临时授权操作（验证授权/撤销即时生效）</h2>
+    <div class="row">
+      <input id="opUid" type="number" placeholder="用户ID" style="width:100px" />
+      <select id="opScope"><option value="row">row</option><option value="column">column</option></select>
+      <select id="opRowScope"><option value="tenant">tenant</option><option value="all">all</option><option value="custom">custom</option></select>
+      <input id="opColumns" placeholder="列名(逗号分隔, column 时)" style="width:200px" />
+      <input id="opTtl" type="number" value="60" style="width:90px" title="TTL 秒" />
+      <input id="opReason" placeholder="事由" style="width:180px" />
+      <button class="primary" onclick="createGrant()">创建临时授权</button>
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const h = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const headers = () => ({ "Content-Type": "application/json", "X-User-Id": $("uid").value });
+const dsId = () => $("dsSel").value;
+
+function toast(msg, ok = true) {
+  const t = $("toast");
+  t.style.borderColor = ok ? "var(--accent)" : "var(--red)";
+  t.textContent = msg; t.style.display = "block";
+  setTimeout(() => t.style.display = "none", 3500);
+}
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { ...headers(), ...(opts.headers || {}) } });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.detail || res.statusText);
+  return body;
+}
+function showTab(name, btn) {
+  $("tab-pol").classList.toggle("hidden", name !== "pol");
+  $("tab-grants").classList.toggle("hidden", name !== "grants");
+  document.querySelectorAll(".tabs button").forEach(b => b.classList.remove("active"));
+  btn.classList.add("active");
+}
+const badge = (v) => `<span class="badge b-${v}">${h(v)}</span>`;
+
+async function loadDatasets() {
+  const { datasets } = await api("/console/datasets");
+  const sel = $("dsSel");
+  const cur = sel.value;
+  sel.innerHTML = datasets.map(d => `<option value="${d.id}">${h(d.name)} (v${d.auth_version})</option>`).join("");
+  if (cur) sel.value = cur;
+  sel.onchange = loadAll;
+}
+
+async function loadOverview() {
+  const o = await api(`/console/datasets/${dsId()}/overview`);
+  $("dsInfo").innerHTML = `
+    <b>数据集</b><span>${h(o.dataset.name)} #${o.dataset.id}</span>
+    <b>当前授权版本</b><span class="mono" style="color:var(--accent)">v${o.dataset.auth_version}</span>
+    <b>导出处置策略</b><span>${h(o.dataset.export_policy)}</span>`;
+  $("cacheInfo").innerHTML = `
+    <b>缓存条目</b><span>${o.cache.valid_entries} 有效 / ${o.cache.entries} 总计</span>
+    <b>累计命中</b><span>${o.cache.total_hits}</span>
+    <b>缓存内版本</b><span class="mono">${h((o.cache.versions_present || []).join(", ") || "-")}</span>`;
+
+  $("versionBody").innerHTML = o.versions.map(v => `
+    <tr><td class="mono">v${v.version}</td><td>${h(v.change_type)}</td>
+    <td class="mono" style="max-width:480px">${h(JSON.stringify(v.detail))}</td>
+    <td>${v.actor_user_id ?? "-"}</td><td class="muted">${h(v.created_at)}</td></tr>`).join("") || emptyRow(5);
+
+  $("policyBody").innerHTML = o.policies.map(p => `
+    <tr><td>${p.id}</td><td>${badge(p.effect)}</td><td>${h(p.scope)}</td>
+    <td>${p.subject_user_id ? "user#" + p.subject_user_id : p.subject_tenant_id ? "tenant#" + p.subject_tenant_id : "全局"}</td>
+    <td class="mono">${h(p.row_scope || "")} ${h((p.columns || []).join(","))} ${p.custom_predicate ? h(JSON.stringify(p.custom_predicate)) : ""}</td>
+    <td>${h(p.description)}</td></tr>`).join("") || emptyRow(6);
+
+  $("grantBody").innerHTML = o.temp_grants.map(g => `
+    <tr><td>${g.id}</td><td>user#${g.user_id}</td><td>${h(g.scope)}</td>
+    <td class="mono">${h(g.row_scope || "")} ${h((g.columns || []).join(","))}</td>
+    <td class="mono">${g.granted_version}→${g.revoked_version ?? "-"}</td>
+    <td class="muted">${h(g.expires_at)}</td>
+    <td>${g.revoked ? badge("deny").replace("deny","已撤销") : g.expired_swept ? '<span class="badge b-stale">已过期</span>' : badge("temp_grant").replace("temp_grant","生效中")}</td>
+    <td>${g.revoked ? "" : `<button class="danger" onclick="revoke(${g.id})">撤销</button>`}</td></tr>`).join("") || emptyRow(8);
+
+  $("exportBody").innerHTML = o.exports.map(j => `
+    <tr><td>#${j.id}</td><td class="mono">v${j.auth_version}</td><td>${badge(j.status)}</td>
+    <td>${j.row_count}</td><td class="muted" style="max-width:320px">${h(j.invalidate_reason || "-")}</td></tr>`).join("") || emptyRow(5);
+
+  $("matBody").innerHTML = o.materialized.map(m => `
+    <tr><td>${h(m.name)}</td><td class="mono">v${m.auth_version}</td><td>${badge(m.status)}</td>
+    <td class="mono">${h((m.group_by || []).join(","))} ${h(JSON.stringify(m.agg))}</td></tr>`).join("") || emptyRow(4);
+}
+const emptyRow = (n) => `<tr><td colspan="${n}" class="muted">暂无数据</td></tr>`;
+
+async function loadPerms() {
+  const o = await api(`/console/datasets/${dsId()}/effective-permissions?user_id=${$("permUid").value}`);
+  $("permOut").innerHTML = `
+    <div class="kv">
+      <b>用户 / 租户</b><span>${h(o.username)} #${o.user_id} / tenant#${o.tenant_id}${o.is_admin ? "（管理员）" : ""}</span>
+      <b>权限版本</b><span class="mono">v${o.auth_version}</span>
+      <b>行级范围</b><span>${h(o.row_scope)}</span>
+      <b>可见列</b><span class="mono">${h(o.visible_columns.join(", ") || "-")}</span>
+      <b>脱敏列</b><span class="mono">${h(JSON.stringify(o.masked_columns))}</span>
+      <b>授权最早到期</b><span>${h(o.grant_expires_at || "-")}</span>
+    </div>
+    <table style="margin-top:10px"><thead><tr><th>来源</th><th>规则ID</th><th>效力</th><th>范围</th><th>详情</th></tr></thead>
+    <tbody>${o.matched_rules.map(r => `<tr><td>${badge(r.source)}</td><td>${r.rule_id}</td><td>${badge(r.effect)}</td>
+      <td>${h(r.scope)}</td><td class="mono">${h(JSON.stringify({row_scope:r.row_scope, columns:r.columns, predicate:r.predicate, expires_at:r.expires_at}))}</td></tr>`).join("") || emptyRow(5)}</tbody></table>`;
+}
+
+async function loadAudit() {
+  const dec = $("auditFilter").value;
+  const o = await api(`/console/audit?dataset_id=${dsId()}${dec ? "&decision=" + dec : ""}&limit=100`);
+  $("auditBody").innerHTML = o.audit_logs.map(a => `
+    <tr><td class="muted">${h(a.created_at)}</td><td class="mono">${h(a.request_id.slice(0,12))}…</td>
+    <td>${h(a.actor_name)}#${a.actor_user_id ?? "-"}</td><td>${h(a.action)}</td>
+    <td>${badge(a.decision)}</td><td class="mono">${a.auth_version ?? "-"}</td>
+    <td style="max-width:360px">${h(a.reason)}</td></tr>`).join("") || emptyRow(7);
+}
+
+async function createGrant() {
+  const body = {
+    user_id: Number($("opUid").value), scope: $("opScope").value,
+    ttl_seconds: Number($("opTtl").value), reason: $("opReason").value,
+  };
+  if (body.scope === "row") body.row_scope = $("opRowScope").value;
+  else body.columns = $("opColumns").value.split(",").map(s => s.trim()).filter(Boolean);
+  try {
+    const r = await api(`/admin/datasets/${dsId()}/temp-grants`, { method: "POST", body: JSON.stringify(body) });
+    toast(`授权成功，权限版本推进至 v${r.auth_version}`);
+    await loadAll();
+  } catch (e) { toast(e.message, false); }
+}
+async function revoke(grantId) {
+  try {
+    const r = await api(`/admin/datasets/${dsId()}/temp-grants/${grantId}/revoke`, { method: "POST" });
+    toast(`已撤销，权限版本推进至 v${r.auth_version}`);
+    await loadAll();
+  } catch (e) { toast(e.message, false); }
+}
+
+async function loadAll() {
+  try {
+    if (!$("dsSel").options.length) await loadDatasets();
+    await Promise.all([loadOverview(), loadAudit()]);
+  } catch (e) { toast(e.message, false); }
+}
+loadAll();
+setInterval(loadAll, 10000);
+</script>
+</body>
+</html>
